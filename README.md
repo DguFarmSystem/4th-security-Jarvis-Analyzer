@@ -59,7 +59,7 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
 3.  **컨테이너 실행 확인 (선택 사항)**:
     -   아래 명령어로 모든 컨테이너가 정상적으로 실행 중인지 확인할 수 있습니다.
     ```bash
-    docker-compose ps
+    docker compose ps
     ```
 
 ### 5.3. API 테스트
@@ -68,18 +68,9 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
 
 - **테스트 명령어**:
   ```bash
-  curl -X POST "http://localhost:8000/api/v1/analyze" \
-  -H "Content-Type: application/json" \
-  -d 
-  '{ 
-    "SessionID": "test-session-123",
-    "User": "testuser",
-    "ServerID": "server-01",
-    "ServerAddr": "192.168.1.10",
-    "SessionStart": "2025-09-28T10:00:00Z",
-    "SessionEnd": "2025-09-28T10:05:00Z",
-    "Transcript": "whoami\nls -la\necho \"hello world\"\nrm -rf /"
-  }'
+  curl -X POST "http://localhost:8000/api/v1/analyze" -H "Content-Type: application/json" -d '{"SessionID": "test-session-123", "User": 
+     "testuser", "ServerID": "server-01", "ServerAddr": "192.168.1.10", "SessionStart": "2025-09-28T10:00:00Z", "SessionEnd": 
+     "2025-09-28T10:05:00Z", "Transcript": "whoami\nls -la\necho \"hello world\"\nrm -rf /"}'
   ```
 
 - **예상 결과**:
@@ -110,5 +101,5 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
 
 -   테스트가 끝나면 아래 명령어로 실행 중인 모든 컨테이너를 중지하고 삭제할 수 있습니다.
     ```bash
-    docker-compose down
+    docker compose down
     ```

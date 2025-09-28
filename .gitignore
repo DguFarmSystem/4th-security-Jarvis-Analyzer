@@ -11,3 +11,4 @@
 
 # Virtual environment
 .venv/
+.ollama_data/
