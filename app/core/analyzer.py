@@ -1,65 +1,70 @@
 import httpx
 from app.models.schemas import AnalysisRequest
 
-# 애플리케이션 전체에서 재사용할 수 있도록 비동기 HTTP 클라이언트를 생성.
 client = httpx.AsyncClient()
 
-# 실제 LLM 분석 서비스의 주소 (실제 URL로 변경 예정)
-LLM_ANALYZER_URL = "http://llm-analyzer:8000/v1/analyze"
+# 컨테이너의 API 주소
+LLM_ANALYZER_URL = "http://llm-analyzer:11434/v1/chat/completions"
 
 async def hybrid_analysis(request: AnalysisRequest) -> dict:
-    """
-    세션 로그(transcript)와 메타데이터를 받아 규칙 기반 및 AI 분석을 수행하고 결과를 AnalysisResponse 형태의 딕셔너리로 반환.
-    """
     transcript = request.transcript
     user = request.user
     server_id = request.server_id
 
-    # 규칙/시퀀스 기반 분석 로직
+    # 규칙/시퀀스 기반 분석 로직 (여기에 규칙 추가)
     rule_based_findings = []
-
-    # 규칙 리스트 (작성 예정)
     dangerous_commands = ["rm -rf /"]
-
-    for commannd in dangerous_commands:
-        if commannd in transcript:
+    for command in dangerous_commands:
+        if command in transcript:
             rule_based_findings.append({
-                "finding": f"Critical command '{commannd}' detected",
-                "type": "rule-based"
+                "type": "dangerous_command",
+                "command": command,
+                "description": f"Dangerous command '{command}' found in session."
             })
 
-    # 시퀀스 기반 로직 (작성 예정)
-    # if "sudo" in transcript and "passwd" in transcript:
-    #     rule_based_findings.append({
-    #         "finding": "Potential privilege escalation attempt detected",
-    #         "type": "rule-based"
-    #     })
+    # 시퀀스 기반 로직 추가 예정
 
-    # AI/LLM 분석 로직
-    # 프롬프트 작성 예정
-    llm_reasoning_text = "구현중.."
+    # AI 분석 로직 (Ollama 연동)
+    llm_reasoning_text = "AI 분석 로직 실행 전"
     try:
-        # LLM 분석 서비스에 transcript를 보내 분석을 요청.
-        response = await client.post(
-            LLM_ANALYZER_URL,
-            json={"transcript": transcript, "metadata": {"user": user, "server_id": server_id}},
-            timeout=30.0
-        )
-        response.raise_for_status()  # 2xx 이외의 응답 코드는 예외를 발생시킴
+        # Phi-3-mini에 보낼 프롬프트
+        prompt = f"""
+                You are a security expert specializing in analyzing SSH session logs.
+                Analyze the following SSH session transcript for user '{user}' on server '{server_id}'.
+                Identify any suspicious or malicious activities.
+
+                Based on your analysis, provide a brief, one-sentence summary of the threat level and your reasoning.
+
+                Transcript:
+                ---
+                {transcript}
+                ---
+                """
+
+        # Ollama  API 형식에 맞는 Payload
+        payload = {
+            "model": "phi3",
+            "messages": [
+                {"role": "system", "content": "You are a helpful security analysis assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False
+        }
+
+        response = await client.post(LLM_ANALYZER_URL, json=payload, timeout=60.0)
+        response.raise_for_status()
         
-        # 실제 응답에서 필요한 부분을 추출.
         llm_result = response.json()
-        llm_reasoning_text = llm_result.get("reasoning", "No reasoning provided by LLM.")
+        llm_reasoning_text = llm_result['choices'][0]['message']['content']
 
     except httpx.RequestError as e:
-        # 네트워크 오류
-        llm_reasoning_text = f"네트워크 오류: {e}"
+        # 네트워크 관련 에러
+        llm_reasoning_text = f"네트워크 에러: {e}"
     except Exception as e:
-        # 그 외 모든 예외 처리
-        llm_reasoning_text = f"오류 발생: {e}"
+        llm_reasoning_text = f"에러 발생: {e}"
 
     # 결과 종합
-    # 규칙 및 시퀀스 로직 추가 예정
+    # 분석 결과 종합 관련 설정 예정
     is_anomaly_detected = len(rule_based_findings) > 0
     threat_score = 9.8 if is_anomaly_detected else 1.0
     threat_level = "Critical" if is_anomaly_detected else "Low"

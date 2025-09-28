@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  # Backend 서비스
+  backend:
+    image: clapppp/teleport-web:latest
+    container_name: teleport-backend
+    ports:
+      - "3000:3000" # 웹 UI 포트
+      - "8080:8080" # 백엔드 API 포트
+    restart: unless-stopped
+
+  # Python 분석 서비스
+  analyzer:
+    build: .
+    container_name: jarvis-analyzer
+    ports:
+      - "8000:8000" # 분석 API 포트
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - llm-analyzer
+
+  # Ollama를 사용한 AI 모델 서비스
+  llm-analyzer:
+    image: ollama/ollama
+    container_name: phi-3-mini
+    ports:
+      - "11434:11434" # Ollama API 포트
+    volumes:
+      - ./ollama_data:/root/.ollama # 모델 데이터를 호스트에 저장하여 보존
+    restart: unless-stopped
