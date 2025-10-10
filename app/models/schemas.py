@@ -11,8 +11,7 @@ class AnalysisRequest(BaseModel):
     session_start: str = Field(..., alias="SessionStart")
     session_end: str = Field(..., alias="SessionEnd")
     transcript: str = Field(..., alias="Transcript")
-    
-    # Go에서 생성된 JSON 필드명(PascalCase)을 Python(snake_case)에 맞게 매핑.
+
     class Config:
         allow_population_by_field_name = True
 
