@@ -1,6 +1,7 @@
 import os
 import httpx
 import glob
+import json
 from sigma.rule import SigmaRule
 from sigma.exceptions import SigmaError
 
@@ -27,42 +28,42 @@ class RuleBasedAnalyzer:
                     print(f"Error processing rule file {file_path}: {e}")
         return loaded_rules
 
-def analyze(self, transcript: str) -> list[dict]:
-    findings = []
+    def analyze(self, transcript: str) -> list[dict]:
+        findings = []
 
-    # transcript를 줄 단위로 나누어 각 줄을 별도의 이벤트로 처리
-    lines = transcript.strip().split('\n')
+        # transcript를 줄 단위로 나누어 각 줄을 별도의 이벤트로 처리
+        lines = transcript.strip().split('\n')
 
-    for line in lines:
-        if not line.strip():  # 빈 줄은 건너뛰기
-            continue
+        for line in lines:
+            if not line.strip():  # 빈 줄은 건너뛰기
+                continue
 
-        # 각 명령어 라인을 더 구조화된 이벤트로 구성.
-        command_parts = line.strip().split()
-        image = command_parts[0]
+            # 각 명령어 라인을 더 구조화된 이벤트로 구성.
+            command_parts = line.strip().split()
+            image = command_parts[0]
 
-        event = {
-            'CommandLine': line.strip(), # 전체 명령어 라인
-            'Image': image               # 명령어 실행 파일
-        }
+            event = {
+                'CommandLine': line.strip(), # 전체 명령어 라인
+                'Image': image               # 명령어 실행 파일
+            }
 
-        for rule in self.rules:
-            try:
-                # rule.match()는 이벤트의 리스트를 받으므로 [event]로 전달
-                if any(rule.match([event])):
-                    # 중복 탐지를 방지하기 위해 이미 추가된 규칙인지 확인
-                    if not any(f['rule_id'] == str(rule.id) for f in findings):
-                        findings.append({
-                            "type": "sigma_rule",
-                            "rule_id": str(rule.id),
-                            "name": rule.title,
-                            "description": rule.description,
-                            "threat_level": rule.level.name.upper(),
-                            "tags": [str(tag) for tag in rule.tags]
-                        })
-            except Exception as e:
-                print(f"Error matching rule '{rule.title}': {e}")
-    return findings
+            for rule in self.rules:
+                try:
+                    # rule.match()는 이벤트의 리스트를 받으므로 [event]로 전달
+                    if any(rule.check([event])):
+                        # 중복 탐지를 방지하기 위해 이미 추가된 규칙인지 확인
+                        if not any(f['rule_id'] == str(rule.id) for f in findings):
+                            findings.append({
+                                "type": "sigma_rule",
+                                "rule_id": str(rule.id),
+                                "name": rule.title,
+                                "description": rule.description,
+                                "threat_level": rule.level.name.upper(),
+                                "tags": [str(tag) for tag in rule.tags]
+                            })
+                except Exception as e:
+                    print(f"Error matching rule '{rule.title}': {e}")
+        return findings
 
 
 # Sigma 규칙이 있는 디렉토리 경로를 지정.
@@ -79,45 +80,64 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
     user = getattr(request, 'user', 'unknown')
     server_id = getattr(request, 'server_id', 'unknown')
 
-    # 규칙 기반 분석을 먼저 실행합니다.
+    # 규칙 기반 분석 실행
     rule_based_findings = rule_analyzer.analyze(transcript)
 
-    llm_reasoning_text = "N/A" # LLM 분석 결과 기본값
+    llm_reasoning_text = "N/A"
     is_anomaly_detected = len(rule_based_findings) > 0
 
-    # 규칙 기반에서 탐지된 내용이 없을 경우에만 LLM을 호출.
+    # 규칙 기반 탐지가 없을 경우에만 LLM 호출
     if not is_anomaly_detected:
-        llm_reasoning_text = "규칙 기반 위협이 탐지되지 않아 LLM 분석을 실행합니다."
         try:
+            # [수정] 새로운 프롬프트 적용
             prompt = f'''
-                    You are a security expert specializing in analyzing SSH session logs.
-                    The following SSH session transcript for user '{user}' on server '{server_id}' did not match any known threat rules.
-                    Analyze it for any other subtle, suspicious, or anomalous behavior that might indicate a threat.
-                    If you find a potential threat, provide a brief, one-sentence summary of your reasoning.
-                    If not, simply state that the activity appears benign.
+                    You are a security expert. Analyze the following SSH session transcript.
+                    The transcript did not match any known high-risk rules.
+                    Your task is to find any other subtle, suspicious, or anomalous behavior.
+
+                    Respond ONLY in JSON format with the following structure:
+                    {{
+                      "is_threat": boolean,
+                      "threat_command": "the single most threatening command line found",
+                      "reason": "a single, concise sentence explaining the threat in Korean"
+                    }}
+
+                    If no threat is found, set "is_threat" to false and provide a benign reason.
+
                     Transcript:
                     ---
                     {transcript}
                     ---
                     '''
-            payload = {
-                "model": "phi3",
-                "messages": [
-                    {"role": "system", "content": "You are a helpful security analysis assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                "stream": False
-            }
+            payload = { "model": "phi3", "messages": [{"role": "user", "content": prompt}], "stream": False }
+
             response = await client.post(LLM_ANALYZER_URL, json=payload, timeout=60.0)
             response.raise_for_status()
-            llm_result = response.json()
-            llm_reasoning_text = llm_result['choices'][0]['message']['content']
-        except httpx.RequestError as e:
-            llm_reasoning_text = f"LLM Analyzer Network Error: {e}"
+
+            llm_raw_response = response.json()['choices'][0]['message']['content']
+
+            # LLM의 응답을 JSON으로 파싱
+            llm_analysis = json.loads(llm_raw_response)
+            llm_reasoning_text = llm_analysis.get("reason", "No reason provided.")
+
+            # LLM의 판단을 최종 결과에 반영
+            if llm_analysis.get("is_threat") == True:
+                is_anomaly_detected = True # is_anomaly 상태를 True로 변경
+                # LLM이 탐지한 위협을 'details'에 추가
+                rule_based_findings.append({
+                    "type": "llm_analysis",
+                    "rule_id": "LLM-S01",
+                    "name": "Suspicious Activity Detected by AI",
+                    "description": f"AI detected a potential threat: {llm_analysis.get('threat_command', 'N/A')}",
+                    "threat_level": "MEDIUM",
+                    "tags": ["ai-detection"]
+                })
+
+        except (httpx.RequestError, json.JSONDecodeError, KeyError, IndexError) as e:
+            llm_reasoning_text = f"LLM analysis failed or returned invalid format: {e}"
         except Exception as e:
             llm_reasoning_text = f"An unexpected error occurred during LLM analysis: {e}"
     else:
-        # 규칙 기반에서 위협이 탐지되었으므로 LLM 분석 스킵.
         llm_reasoning_text = "명확한 규칙 기반 위협이 탐지되어 LLM 분석을 건너뛰었습니다."
 
     # 최종 결과 종합
