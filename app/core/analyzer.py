@@ -4,7 +4,8 @@ import glob
 import json
 import yaml
 import re
-
+import ast
+import logging
 
 from app.models.schemas import AnalysisRequest
 
@@ -139,6 +140,65 @@ rule_analyzer = RuleBasedAnalyzer(RULES_PATH)
 client = httpx.AsyncClient()
 LLM_ANALYZER_URL = "http://llm-analyzer:11434/api/chat"
 
+async def call_and_parse_llm(payload):
+    try:
+        logging.debug("Calling LLM_ANALYZER_URL %s with payload keys: %s", LLM_ANALYZER_URL, list(payload.keys()))
+        response = await client.post(LLM_ANALYZER_URL, json=payload, timeout=60.0)
+        logging.debug("LLM response status: %s", response.status_code)
+        response.raise_for_status()
+
+        try:
+            body = response.json()
+        except Exception:
+            body = None
+
+        llm_content = None
+
+        if isinstance(body, dict):
+            choices = body.get('choices') if isinstance(body.get('choices'), list) else None
+            if choices and len(choices) > 0:
+                choice = choices[0]
+                if isinstance(choice, dict):
+                    if isinstance(choice.get('message'), dict) and 'content' in choice['message']:
+                        llm_content = choice['message']['content']
+                    elif 'text' in choice:
+                        llm_content = choice['text']
+                    elif 'content' in choice:
+                        llm_content = choice['content']
+            if llm_content is None:
+                if set(body.keys()) & {'is_threat', 'reason', 'threat_command'}:
+                    return body
+                llm_content = json.dumps(body, ensure_ascii=False)
+        else:
+            llm_content = response.text
+
+        try:
+            return json.loads(llm_content)
+        except Exception:
+
+            match = re.search(r'(\{[\s\S]*\})', llm_content)
+            if match:
+                json_str = match.group(1)
+                try:
+                    return json.loads(json_str)
+                except Exception:
+                    try:
+                        return ast.literal_eval(json_str)
+                    except Exception:
+                        pass
+
+            try:
+                return ast.literal_eval(llm_content)
+            except Exception:
+
+                short = (llm_content[:1000] + '...') if len(llm_content) > 1000 else llm_content
+                raise RuntimeError(f"Unable to parse LLM response as JSON. Response snippet: {short}")
+
+    except Exception as e:
+        logging.exception("LLM call/parse failed")
+        raise RuntimeError(f"Failed to call or parse LLM response: {e}")
+
+
 async def hybrid_analysis(request: AnalysisRequest) -> dict:
     transcript = request.transcript
     user = getattr(request, 'user', 'unknown')
@@ -175,29 +235,31 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
                     '''
             payload = { "model": "phi3", "messages": [{"role": "user", "content": prompt}], "stream": False }
 
-            response = await client.post(LLM_ANALYZER_URL, json=payload, timeout=60.0)
-            response.raise_for_status()
+            llm_analysis = await call_and_parse_llm(payload)
 
-            llm_raw_response = response.json()['choices'][0]['message']['content']
-
-            # LLM의 응답을 JSON으로 파싱
-            llm_analysis = json.loads(llm_raw_response)
-            llm_reasoning_text = llm_analysis.get("reason", "No reason provided.")
+            if isinstance(llm_analysis, dict):
+                llm_reasoning_text = llm_analysis.get("reason", "No reason provided.")
+                is_threat = llm_analysis.get("is_threat") is True
+                threat_cmd = llm_analysis.get("threat_command", "N/A")
+            else:
+                llm_reasoning_text = str(llm_analysis)
+                is_threat = False
+                threat_cmd = "N/A"
 
             # LLM의 판단을 최종 결과에 반영
-            if llm_analysis.get("is_threat") == True:
-                is_anomaly_detected = True # is_anomaly 상태를 True로 변경
+            if is_threat:
+                is_anomaly_detected = True  # is_anomaly 상태를 True로 변경
                 # LLM이 탐지한 위협을 'details'에 추가
                 rule_based_findings.append({
                     "type": "llm_analysis",
                     "rule_id": "LLM-S01",
                     "name": "Suspicious Activity Detected by AI",
-                    "description": f"AI detected a potential threat: {llm_analysis.get('threat_command', 'N/A')}",
+                    "description": f"AI detected a potential threat: {threat_cmd}",
                     "threat_level": "MEDIUM",
                     "tags": ["ai-detection"]
                 })
 
-        except (httpx.RequestError, json.JSONDecodeError, KeyError, IndexError) as e:
+        except (httpx.RequestError, json.JSONDecodeError, KeyError, IndexError, RuntimeError, ValueError) as e:
             llm_reasoning_text = f"LLM analysis failed or returned invalid format: {e}"
         except Exception as e:
             llm_reasoning_text = f"An unexpected error occurred during LLM analysis: {e}"
