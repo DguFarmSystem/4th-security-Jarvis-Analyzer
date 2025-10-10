@@ -63,45 +63,48 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
     user = getattr(request, 'user', 'unknown')
     server_id = getattr(request, 'server_id', 'unknown')
 
-
+    # 규칙 기반 분석을 먼저 실행합니다.
     rule_based_findings = rule_analyzer.analyze(transcript)
 
-    # LLM 기반 분석 실행
-    llm_reasoning_text = "AI 분석 로직 실행 전"
-    # ... (LLM 호출 로직은 여기에 그대로 유지) ...
-    try:
-        prompt = f'''
-                You are a security expert specializing in analyzing SSH session logs.
-                Analyze the following SSH session transcript for user '{user}' on server '{server_id}'.
-                Identify any suspicious or malicious activities.
-
-                Based on your analysis, provide a brief, one-sentence summary of the threat level and your reasoning.
-
-                Transcript:
-                ---
-                {transcript}
-                ---
-                '''
-        payload = {
-            "model": "phi3",
-            "messages": [
-                {"role": "system", "content": "You are a helpful security analysis assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False
-        }
-        response = await client.post(LLM_ANALYZER_URL, json=payload, timeout=60.0)
-        response.raise_for_status()
-        llm_result = response.json()
-        llm_reasoning_text = llm_result['choices'][0]['message']['content']
-    except httpx.RequestError as e:
-        llm_reasoning_text = f"LLM Analyzer Network Error: {e}"
-    except Exception as e:
-        llm_reasoning_text = f"An unexpected error occurred during LLM analysis: {e}"
-
-    # 결과 종합
+    llm_reasoning_text = "N/A" # LLM 분석 결과 기본값
     is_anomaly_detected = len(rule_based_findings) > 0
 
+    # 규칙 기반에서 탐지된 내용이 없을 경우에만 LLM을 호출.
+    if not is_anomaly_detected:
+        llm_reasoning_text = "규칙 기반 위협이 탐지되지 않아 LLM 분석을 실행합니다."
+        try:
+            prompt = f'''
+                    You are a security expert specializing in analyzing SSH session logs.
+                    The following SSH session transcript for user '{user}' on server '{server_id}' did not match any known threat rules.
+                    Analyze it for any other subtle, suspicious, or anomalous behavior that might indicate a threat.
+                    If you find a potential threat, provide a brief, one-sentence summary of your reasoning.
+                    If not, simply state that the activity appears benign.
+                    Transcript:
+                    ---
+                    {transcript}
+                    ---
+                    '''
+            payload = {
+                "model": "phi3",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful security analysis assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": False
+            }
+            response = await client.post(LLM_ANALYZER_URL, json=payload, timeout=60.0)
+            response.raise_for_status()
+            llm_result = response.json()
+            llm_reasoning_text = llm_result['choices'][0]['message']['content']
+        except httpx.RequestError as e:
+            llm_reasoning_text = f"LLM Analyzer Network Error: {e}"
+        except Exception as e:
+            llm_reasoning_text = f"An unexpected error occurred during LLM analysis: {e}"
+    else:
+        # 규칙 기반에서 위협이 탐지되었으므로 LLM 분석 스킵.
+        llm_reasoning_text = "명확한 규칙 기반 위협이 탐지되어 LLM 분석을 건너뛰었습니다."
+
+    # 최종 결과 종합
     highest_level = "LOW"
     summary = "No immediate threats detected based on Sigma rules."
 
