@@ -78,7 +78,6 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
   ```json
   {
     "is_anomaly": true,
-    "threat_score": 9.8,
     "threat_level": "Critical",
     "summary": "Critical threat detected based on command patterns.",
     "details": [

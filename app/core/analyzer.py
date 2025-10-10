@@ -2,67 +2,131 @@ import os
 import httpx
 import glob
 import json
-from sigma.rule import SigmaRule
-from sigma.exceptions import SigmaError
+import yaml
+import re
+
 
 from app.models.schemas import AnalysisRequest
 
 class RuleBasedAnalyzer:
     def __init__(self, rules_path: str):
         self.rules = self._load_rules(rules_path)
-        print(f"Loaded {len(self.rules)} Sigma rules successfully.")
+        print(f"Loaded {len(self.rules)} rules using PyYAML.")
 
-    def _load_rules(self, path: str) -> list[SigmaRule]:
+    def _load_rules(self, path: str) -> list[dict]:
         rule_files = glob.glob(os.path.join(path, '**', '*.yml'), recursive=True)
-
         loaded_rules = []
         for file_path in rule_files:
             with open(file_path, 'r', encoding='utf-8') as f:
                 try:
-                    # 각 YAML 파일을 SigmaRule 객체로 직접 파싱.
-                    rule = SigmaRule.from_yaml(f.read())
-                    loaded_rules.append(rule)
-                except SigmaError as e:
-                    print(f"Warning: Could not load rule {os.path.basename(file_path)}. Reason: {e}")
-                except Exception as e:
-                    print(f"Error processing rule file {file_path}: {e}")
+                    rule = yaml.safe_load(f)
+                    if rule and 'detection' in rule and 'logsource' in rule:
+                        if rule['logsource'].get('category') == 'process_creation':
+                            loaded_rules.append(rule)
+                except yaml.YAMLError as e:
+                    print(f"Warning: Could not parse YAML file {os.path.basename(file_path)}. Reason: {e}")
         return loaded_rules
+
+    def _evaluate_rule(self, rule_detection: dict, event: dict) -> bool:
+        """규칙의 detection 조건을 간단히 평가하는 함수"""
+        condition = rule_detection.get('condition')
+
+        # 각 selection/keyword의 평가 결과를 저장
+        eval_results = {}
+
+        for key, value in rule_detection.items():
+            if key.startswith('selection') or key == 'keywords':
+                eval_results[key] = self._check_selection(value, event)
+
+        # condition을 평가하여 최종 결과 반환
+        try:
+            # condition 문자열의 변수들을 True/False로 치환
+            condition_str = condition.replace('1 of them', 'or').replace('all of them', 'and')
+            for key, result in eval_results.items():
+                # '1 of selection_*' 같은 패턴을 처리하기 위해 와일드카드 지원
+                if '*' in key:
+                    key_pattern = key.replace('*', '.*')
+                    for eval_key in eval_results:
+                        if re.match(key_pattern, eval_key):
+                            condition_str = condition_str.replace(key, str(eval_results[eval_key]))
+                else:
+                    condition_str = condition_str.replace(key, str(result))
+
+            return eval(condition_str)
+        except:
+            return False # condition 평가 실패 시 False 반환
+
+    def _check_selection(self, selection: any, event: dict) -> bool:
+        """개별 selection/keywords 블록이 event와 일치하는지 확인"""
+        if isinstance(selection, dict):
+            # 'CommandLine|contains|all': ['a', 'b'] 같은 딕셔너리 형태
+            for key, value in selection.items():
+                # '|all' 같은 특수 키 처리
+                if '|' in key and key.split('|')[1] == 'all':
+                    patterns = value if isinstance(value, list) else [value]
+                    # 모든 패턴이 CommandLine에 포함되어야 함
+                    return all(p in event['CommandLine'] for p in patterns)
+
+                parts = key.split('|')
+                field, modifiers = parts[0], parts[1:]
+
+                event_value = event.get(field)
+                if not event_value: continue
+
+                patterns = value if isinstance(value, list) else [value]
+
+                all_modifier = 'all' in modifiers
+                match_results = []
+
+                for pattern in patterns:
+                    match = False
+                    # pattern이 문자열일 경우에만 연산 수행
+                    if isinstance(pattern, str):
+                        if 'contains' in modifiers and pattern in event_value: match = True
+                        elif 'endswith' in modifiers and event_value.endswith(pattern): match = True
+                        elif 'startswith' in modifiers and event_value.startswith(pattern): match = True
+                        elif not modifiers and event_value == pattern: match = True
+                    match_results.append(match)
+
+                if all_modifier: return all(match_results)
+                else: return any(match_results)
+
+        elif isinstance(selection, list):
+            # 키워드 리스트 형태
+            for item in selection:
+                # 리스트의 항목이 문자열인 경우에만 확인
+                if isinstance(item, str) and item in event['CommandLine']:
+                    return True
+        return False
+
 
     def analyze(self, transcript: str) -> list[dict]:
         findings = []
-
-        # transcript를 줄 단위로 나누어 각 줄을 별도의 이벤트로 처리
         lines = transcript.strip().split('\n')
 
-        for line in lines:
-            if not line.strip():  # 빈 줄은 건너뛰기
-                continue
+        for rule in self.rules:
+            detected_lines = []
+            for line in lines:
+                if not line.strip(): continue
 
-            # 각 명령어 라인을 더 구조화된 이벤트로 구성.
-            command_parts = line.strip().split()
-            image = command_parts[0]
+                command_parts = line.strip().split()
+                image = command_parts[0] if command_parts else ""
 
-            event = {
-                'CommandLine': line.strip(), # 전체 명령어 라인
-                'Image': image               # 명령어 실행 파일
-            }
+                event = {'CommandLine': line.strip(), 'Image': image, 'ParentImage': ''}
 
-            for rule in self.rules:
-                try:
-                    # rule.match()는 이벤트의 리스트를 받으므로 [event]로 전달
-                    if any(rule.check([event])):
-                        # 중복 탐지를 방지하기 위해 이미 추가된 규칙인지 확인
-                        if not any(f['rule_id'] == str(rule.id) for f in findings):
-                            findings.append({
-                                "type": "sigma_rule",
-                                "rule_id": str(rule.id),
-                                "name": rule.title,
-                                "description": rule.description,
-                                "threat_level": rule.level.name.upper(),
-                                "tags": [str(tag) for tag in rule.tags]
-                            })
-                except Exception as e:
-                    print(f"Error matching rule '{rule.title}': {e}")
+                if self._evaluate_rule(rule.get('detection', {}), event):
+                    detected_lines.append(line.strip())
+
+            if detected_lines:
+                if not any(f['rule_id'] == rule.get('id') for f in findings):
+                    findings.append({
+                        "type": "sigma_rule",
+                        "rule_id": rule.get('id', 'N/A'),
+                        "name": rule.get('title', 'N/A'),
+                        "description": rule.get('description', '') + f" (Matched Command: {', '.join(detected_lines)})",
+                        "threat_level": rule.get('level', 'informational').upper(),
+                        "tags": rule.get('tags', [])
+                    })
         return findings
 
 
@@ -73,7 +137,7 @@ RULES_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'sigma_rules')
 rule_analyzer = RuleBasedAnalyzer(RULES_PATH)
 
 client = httpx.AsyncClient()
-LLM_ANALYZER_URL = "http://llm-analyzer:11434/v1/chat/completions"
+LLM_ANALYZER_URL = "http://llm-analyzer:11434/api/chat"
 
 async def hybrid_analysis(request: AnalysisRequest) -> dict:
     transcript = request.transcript
@@ -89,7 +153,7 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
     # 규칙 기반 탐지가 없을 경우에만 LLM 호출
     if not is_anomaly_detected:
         try:
-            # [수정] 새로운 프롬프트 적용
+            # 새로운 프롬프트 적용
             prompt = f'''
                     You are a security expert. Analyze the following SSH session transcript.
                     The transcript did not match any known high-risk rules.
