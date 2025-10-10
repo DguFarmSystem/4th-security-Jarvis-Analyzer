@@ -19,9 +19,7 @@ class AnalysisRequest(BaseModel):
 # 분석 결과를 담을 응답 모델
 class AnalysisResponse(BaseModel):
     is_anomaly: bool
-    threat_score: float
     threat_level: str
     summary: str
-    tags: List[str]
     details: List[Dict]
     llm_reasoning: str
