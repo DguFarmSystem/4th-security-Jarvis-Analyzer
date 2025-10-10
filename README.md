@@ -35,9 +35,9 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
 ### 5.1. 사전 준비
 
 - **Docker 및 Docker Compose 설치**:
-  - 테스트를 진행할 시스템에 Docker가 설치되어 있어야 합니다.
+    - 테스트를 진행할 시스템에 Docker가 설치되어 있어야 합니다.
 - **프로젝트 소스 코드**:
-  - 이 프로젝트의 전체 소스 코드를 준비합니다.
+    - 이 프로젝트의 전체 소스 코드를 준비합니다.
 
 ### 5.2. 테스트 환경 실행
 
@@ -70,18 +70,17 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
   ```bash
   curl -X POST "http://localhost:8000/api/v1/analyze" -H "Content-Type: application/json" -d '{"SessionID": "test-session-123", "User": 
      "testuser", "ServerID": "server-01", "ServerAddr": "192.168.1.10", "SessionStart": "2025-09-28T10:00:00Z", "SessionEnd": 
-     "2025-09-28T10:05:00Z", "Transcript": "whoami\nls -la\necho \"hello world\"\nrm -rf /"}'
+     "2025-09-28T10:05:00Z", "Transcript": "테스트 문구 (ex. /rm)"}'
   ```
 
 - **예상 결과**:
-  -   `Transcript`에 포함된 `rm -rf /` 명령어 때문에, 다음과 같이 "Critical" 등급의 분석 결과가 JSON 형태로 반환됩니다.
+    -   `Transcript`에 포함된 `rm -rf /` 명령어 때문에, 다음과 같이 "Critical" 등급의 분석 결과가 JSON 형태로 반환됩니다.
   ```json
   {
     "is_anomaly": true,
     "threat_score": 9.8,
     "threat_level": "Critical",
     "summary": "Critical threat detected based on command patterns.",
-    "tags": ["rule-based-check"],
     "details": [
       {
         "finding": "Critical command 'rm -rf /' detected",
