@@ -27,26 +27,42 @@ class RuleBasedAnalyzer:
                     print(f"Error processing rule file {file_path}: {e}")
         return loaded_rules
 
-    def analyze(self, transcript: str) -> list[dict]:
-        findings = []
-        # Sigma 규칙과 매칭시키기 위해 분석할 데이터를 리스트 형태로 변형.
-        events = [{'CommandLine': transcript}]
+def analyze(self, transcript: str) -> list[dict]:
+    findings = []
+
+    # transcript를 줄 단위로 나누어 각 줄을 별도의 이벤트로 처리
+    lines = transcript.strip().split('\n')
+
+    for line in lines:
+        if not line.strip():  # 빈 줄은 건너뛰기
+            continue
+
+        # 각 명령어 라인을 더 구조화된 이벤트로 구성.
+        command_parts = line.strip().split()
+        image = command_parts[0]
+
+        event = {
+            'CommandLine': line.strip(), # 전체 명령어 라인
+            'Image': image               # 명령어 실행 파일
+        }
 
         for rule in self.rules:
             try:
-                # rule.match() 메서드를 사용하여 이벤트가 규칙과 일치하는지 확인.
-                if any(rule.match(events)):
-                    findings.append({
-                        "type": "sigma_rule",
-                        "rule_id": str(rule.id),
-                        "name": rule.title,
-                        "description": rule.description,
-                        "threat_level": rule.level.name.upper(),
-                        "tags": [str(tag) for tag in rule.tags]
-                    })
+                # rule.match()는 이벤트의 리스트를 받으므로 [event]로 전달
+                if any(rule.match([event])):
+                    # 중복 탐지를 방지하기 위해 이미 추가된 규칙인지 확인
+                    if not any(f['rule_id'] == str(rule.id) for f in findings):
+                        findings.append({
+                            "type": "sigma_rule",
+                            "rule_id": str(rule.id),
+                            "name": rule.title,
+                            "description": rule.description,
+                            "threat_level": rule.level.name.upper(),
+                            "tags": [str(tag) for tag in rule.tags]
+                        })
             except Exception as e:
                 print(f"Error matching rule '{rule.title}': {e}")
-        return findings
+    return findings
 
 
 # Sigma 규칙이 있는 디렉토리 경로를 지정.
