@@ -70,26 +70,43 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
   ```bash
   curl -X POST "http://localhost:8000/api/v1/analyze" -H "Content-Type: application/json" -d '{"SessionID": "test-session-123", "User": 
      "testuser", "ServerID": "server-01", "ServerAddr": "192.168.1.10", "SessionStart": "2025-09-28T10:00:00Z", "SessionEnd": 
-     "2025-09-28T10:05:00Z", "Transcript": "테스트 문구 (ex. /rm)"}'
+     "2025-09-28T10:05:00Z", "Transcript": "/rm"}'
   ```
 
 - **예상 결과**:
-    -   `Transcript`에 포함된 `rm -rf /` 명령어 때문에, 다음과 같이 "Critical" 등급의 분석 결과가 JSON 형태로 반환됩니다.
+    -   `Transcript`에 `/rm` 명령어 때문에, 다음과 같이 "Critical" 등급의 분석 결과가 JSON 형태로 반환됩니다.
   ```json
   {
-    "is_anomaly": true,
-    "threat_score": 9.8,
-    "threat_level": "Critical",
-    "summary": "Critical threat detected based on command patterns.",
-    "details": [
-      {
-        "finding": "Critical command 'rm -rf /' detected",
-        "type": "rule-based"
-      }
-    ],
-    "llm_reasoning": "..."
-  }
-  ```
+  "is_anomaly": true,
+  "threat_level": "MEDIUM",
+  "summary": "Threat detected: MEDIUM. Matched rule: Clear Linux Logs.",
+  "details": [
+    {
+      "type": "sigma_rule",
+      "rule_id": "80915f59-9b56-4616-9de0-fd0dea6c12fe",
+      "name": "Clear Linux Logs",
+      "description": "Detects attempts to clear logs on the system. Adversaries may clear system logs to hide evidence of an intrusion (Matched Command: /rm)",
+      "threat_level": "MEDIUM",
+      "tags": [
+        "attack.defense-evasion",
+        "attack.t1070.002"
+      ]
+    },
+    {
+      "type": "sigma_rule",
+      "rule_id": "30aed7b6-d2c1-4eaf-9382-b6bc43e50c57",
+      "name": "File Deletion",
+      "description": "Detects file deletion using \"rm\", \"shred\" or \"unlink\" commands which are used often by adversaries to delete files left behind by the actions of their intrusion activity (Matched Command: /rm)",
+      "threat_level": "INFORMATIONAL",
+      "tags": [
+        "attack.defense-evasion",
+        "attack.t1070.004"
+      ]
+    }
+  ],
+  "llm_reasoning": "명확한 규칙 기반 위협이 탐지되어 LLM 분석을 건너뛰었습니다."
+    }
+    ```
 
 ### 5.4. 서비스 접속 정보
 
