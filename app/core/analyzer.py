@@ -147,56 +147,25 @@ async def call_and_parse_llm(payload):
         logging.debug("LLM response status: %s", response.status_code)
         response.raise_for_status()
 
+        # 응답 본문을 JSON으로 파싱 시도
         try:
             body = response.json()
-        except Exception:
-            body = None
+            # Ollama 응답 형식에서 content 추출
+            if 'message' in body and 'content' in body['message']:
+                return body['message']['content'].strip()
+        except json.JSONDecodeError:
+            # JSON 파싱 실패 시, 텍스트로 처리
+            return response.text.strip()
+        
+        # 예상치 못한 JSON 구조일 경우
+        return response.text.strip()
 
-        llm_content = None
-
-        if isinstance(body, dict):
-            choices = body.get('choices') if isinstance(body.get('choices'), list) else None
-            if choices and len(choices) > 0:
-                choice = choices[0]
-                if isinstance(choice, dict):
-                    if isinstance(choice.get('message'), dict) and 'content' in choice['message']:
-                        llm_content = choice['message']['content']
-                    elif 'text' in choice:
-                        llm_content = choice['text']
-                    elif 'content' in choice:
-                        llm_content = choice['content']
-            if llm_content is None:
-                if set(body.keys()) & {'is_threat', 'reason', 'threat_command'}:
-                    return body
-                llm_content = json.dumps(body, ensure_ascii=False)
-        else:
-            llm_content = response.text
-
-        try:
-            return json.loads(llm_content)
-        except Exception:
-
-            match = re.search(r'(\{[\s\S]*\})', llm_content)
-            if match:
-                json_str = match.group(1)
-                try:
-                    return json.loads(json_str)
-                except Exception:
-                    try:
-                        return ast.literal_eval(json_str)
-                    except Exception:
-                        pass
-
-            try:
-                return ast.literal_eval(llm_content)
-            except Exception:
-
-                short = (llm_content[:1000] + '...') if len(llm_content) > 1000 else llm_content
-                raise RuntimeError(f"Unable to parse LLM response as JSON. Response snippet: {short}")
-
+    except httpx.RequestError as e:
+        logging.exception("LLM call failed")
+        raise RuntimeError(f"Failed to call LLM: {e}")
     except Exception as e:
-        logging.exception("LLM call/parse failed")
-        raise RuntimeError(f"Failed to call or parse LLM response: {e}")
+        logging.exception("LLM response processing failed")
+        raise RuntimeError(f"Failed to process LLM response: {e}")
 
 
 async def hybrid_analysis(request: AnalysisRequest) -> dict:
@@ -213,54 +182,48 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
     # 규칙 기반 탐지가 없을 경우에만 LLM 호출
     if not is_anomaly_detected:
         try:
-            # 새로운 프롬프트 적용
-            prompt = f'''
-                    You are a security expert. Analyze the following SSH session transcript.
-                    The transcript did not match any known high-risk rules.
-                    Your task is to find any other subtle, suspicious, or anomalous behavior.
+            # LLM이 위협적인 명령어를 직접 추출하도록 프롬프트 설정
+            prompt = f"""
+                    You are a security analysis bot. Your task is to analyze the following SSH transcript and identify if it contains any single command line that indicates a threat.
 
-                    Respond ONLY in JSON format with the following structure:
-                    {{
-                      "is_threat": boolean,
-                      "threat_command": "the single most threatening command line found",
-                      "reason": "a single, concise sentence explaining the threat in Korean"
-                    }}
+                    - **If you find a suspicious command line:** Your response MUST be ONLY that single, complete command line and nothing else.
+                    - **If you do not find any threat:** Your response MUST be ONLY the exact string `NO_THREAT`.
 
-                    If no threat is found, set "is_threat" to false and provide a benign reason.
+                    Do not add any explanation, reasoning, or any other text to your response.
 
-                    Transcript:
+                    **Transcript to Analyze:**
                     ---
                     {transcript}
                     ---
-                    '''
+                    """
             payload = { "model": "phi3", "messages": [{"role": "user", "content": prompt}], "stream": False }
 
-            llm_analysis = await call_and_parse_llm(payload)
+            llm_response_text = await call_and_parse_llm(payload)
+            
+            is_threat = False
+            # 기본적으로 위협이 없다고 가정
+            llm_reasoning_text = "AI가 분석한 결과, 특별한 위협이 발견되지 않았습니다."
 
-            if isinstance(llm_analysis, dict):
-                llm_reasoning_text = llm_analysis.get("reason", "No reason provided.")
-                is_threat = llm_analysis.get("is_threat") is True
-                threat_cmd = llm_analysis.get("threat_command", "N/A")
-            else:
-                llm_reasoning_text = str(llm_analysis)
-                is_threat = False
-                threat_cmd = "N/A"
-
+            # LLM 응답이 'NO_THREAT'가 아니고, 비어있지 않다면 위협으로 간주
+            if llm_response_text and llm_response_text.strip() != "NO_THREAT":
+                is_threat = True
+                threatening_cmd = llm_response_text.strip()
+                llm_reasoning_text = f"AI가 다음 명령어를 의심스러운 활동으로 탐지했습니다: `{threatening_cmd}`"
+            
             # LLM의 판단을 최종 결과에 반영
             if is_threat:
-                is_anomaly_detected = True  # is_anomaly 상태를 True로 변경
-                # LLM이 탐지한 위협을 'details'에 추가
+                is_anomaly_detected = True
                 rule_based_findings.append({
                     "type": "llm_analysis",
                     "rule_id": "LLM-S01",
                     "name": "Suspicious Activity Detected by AI",
-                    "description": f"AI detected a potential threat: {threat_cmd}",
+                    "description": f"AI detected a potential threat in the command: `{threatening_cmd}`",
                     "threat_level": "MEDIUM",
                     "tags": ["ai-detection"]
                 })
 
-        except (httpx.RequestError, json.JSONDecodeError, KeyError, IndexError, RuntimeError, ValueError) as e:
-            llm_reasoning_text = f"LLM analysis failed or returned invalid format: {e}"
+        except (httpx.RequestError, RuntimeError) as e:
+            llm_reasoning_text = f"LLM analysis failed: {e}"
         except Exception as e:
             llm_reasoning_text = f"An unexpected error occurred during LLM analysis: {e}"
     else:
