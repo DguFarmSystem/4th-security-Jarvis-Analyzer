@@ -43,20 +43,29 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
 
 터미널에서 프로젝트의 루트 디렉토리로 이동한 후, 아래 명령어를 순서대로 실행합니다.
 
-1.  **전체 서비스 빌드 및 실행**:
+1. ** 소스 코드 로컬 환경에 클론":
+    - '서비스를 빌드할 수 있는 소스 코드를 로컬 환경에 클론한 후, 해당 디렉토리로 이동합니다.'
+    ```bash
+    git clone https://github.com/DguFarmSystem/4th-security-Jarvis-Analyzer.git
+   ```
+    ```bash
+    cd 4th-security-Jarvis-Analyzer
+    ```
+
+2. **전체 서비스 빌드 및 실행**:
     -   `docker-compose.yml`에 정의된 모든 서비스(Backend, Analyzer, Ollama)를 빌드하고 백그라운드에서 실행합니다.
     ```bash
     docker compose up -d --build
     ```
 
-2.  **AI 모델 다운로드 (생략 가능)**:
+3. **AI 모델 다운로드 (생략 가능)**:
     -   서비스가 실행된 후, 아래 명령어를 터미널에 입력하여 Ollama 컨테이너가 Phi-3 모델을 다운로드하도록 합니다.
     ```bash
     docker exec -it phi-3-mini ollama run phi3
     ```
     *(다운로드가 시작되고 `>>>` 프롬프트가 표시되면 완료된 것입니다. `Ctrl+D`로 빠져나올 수 있습니다.)*
 
-3.  **컨테이너 실행 확인 (선택 사항)**:
+4. **컨테이너 실행 확인 (선택 사항)**:
     -   아래 명령어로 모든 컨테이너가 정상적으로 실행 중인지 확인할 수 있습니다.
     ```bash
     docker compose ps
