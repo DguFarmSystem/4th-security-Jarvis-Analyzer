@@ -58,7 +58,7 @@ Jarvis 보안 분석 도구는 SSH 세션 로그를 받아 위협을 탐지하�
     docker compose up -d --build
     ```
 
-3. **AI 모델 다운로드 (생략 가능)**:
+3. **AI 모델 다운로드**:
     -   서비스가 실행된 후, 아래 명령어를 터미널에 입력하여 Ollama 컨테이너가 Phi-3 모델을 다운로드하도록 합니다.
     ```bash
     docker exec -it phi-3-mini ollama run phi3
