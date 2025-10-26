@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints import analysis
 
 # FastAPI 애플리케이션 인스턴스 생성
@@ -6,6 +7,15 @@ app = FastAPI(
     title="Jarvis Security Analyzer",
     description="A threat analysis tool for SSH session logs.",
     version="0.1.0",
+)
+
+# CORS 미들웨어 추가
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # /api/v1 접두사와 함께 analysis 라우터를 앱에 포함
