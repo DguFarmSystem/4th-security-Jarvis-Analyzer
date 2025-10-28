@@ -227,7 +227,10 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
             llm_reasoning_text = "AI가 분석한 결과, 특별한 위협이 발견되지 않았습니다."
 
             # LLM 응답이 'NO_THREAT'가 아니고, 비어있지 않다면 위협으로 간주
-            if llm_response_text and llm_response_text.strip() != "NO_THREAT":
+            normalized_resp = llm_response_text.strip().lower()
+            no_threat_keywords = ["no_threat", "no threat", "none", "no threat detected", "safe"]
+
+            if normalized_resp and all(keyword not in normalized_resp for keyword in no_threat_keywords):
                 is_threat = True
                 threatening_cmd = llm_response_text.strip()
                 llm_reasoning_text = f"AI가 다음 명령어를 의심스러운 활동으로 탐지했습니다: `{threatening_cmd}`"
