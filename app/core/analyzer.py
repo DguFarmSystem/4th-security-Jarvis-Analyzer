@@ -28,6 +28,19 @@ class RuleBasedAnalyzer:
                     print(f"Warning: Could not parse YAML file {os.path.basename(file_path)}. Reason: {e}")
         return loaded_rules
 
+    import re
+
+    def extract_user_commands(transcript: str) -> str:
+        lines = transcript.splitlines()
+        commands = []
+        for line in lines:
+            match = re.search(r'root@[^\s]+:~#\s*(.+)', line)
+            if match:
+                cmd = match.group(1).strip()
+                if cmd:
+                    commands.append(cmd)
+        return "\n".join(commands)
+
     def _evaluate_rule(self, rule_detection: dict, event: dict) -> bool:
         """규칙의 detection 조건을 간단히 평가하는 함수"""
         condition = rule_detection.get('condition')
@@ -184,18 +197,27 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
         try:
             # LLM이 위협적인 명령어를 직접 추출하도록 프롬프트 설정
             prompt = f"""
-                    You are a security analysis bot. Your task is to analyze the following SSH transcript and identify if it contains any single command line that indicates a threat.
+                You are a strict security log analyzer. Analyze only the given SSH transcript.
 
-                    - **If you find a suspicious command line:** Your response MUST be ONLY that single, complete command line and nothing else.
-                    - **If you do not find any threat:** Your response MUST be ONLY the exact string `NO_THREAT`.
+                You must follow these strict rules:
 
-                    Do not add any explanation, reasoning, or any other text to your response.
+                1. Only analyze actual user commands that come *after* the prompt like `root@...:~#`.
+                2. Ignore any lines that:
+                - start with `bash:`, `logout`, `Failed to launch:`, or other system messages
+                - do not directly follow a prompt
+                3. You are forbidden from making assumptions or hallucinating commands.
+                - If a command is **not explicitly written** in the transcript, you **must not mention it.**
+                - Do NOT invent or imagine commands such as `rm -rf`, `curl`, etc. unless they literally appear.
+                4. Respond only with:
+                - The exact suspicious command line (if found in the transcript)
+                - or exactly `NO_THREAT` if no suspicious command exists.
+                5. Do not include any reasoning, explanation, or additional text.
 
-                    **Transcript to Analyze:**
-                    ---
-                    {transcript}
-                    ---
-                    """
+                Transcript:
+                ---
+                {transcript}
+                ---
+                """
             payload = { "model": "phi3", "messages": [{"role": "user", "content": prompt}], "stream": False }
 
             llm_response_text = await call_and_parse_llm(payload)
@@ -205,7 +227,10 @@ async def hybrid_analysis(request: AnalysisRequest) -> dict:
             llm_reasoning_text = "AI가 분석한 결과, 특별한 위협이 발견되지 않았습니다."
 
             # LLM 응답이 'NO_THREAT'가 아니고, 비어있지 않다면 위협으로 간주
-            if llm_response_text and llm_response_text.strip() != "NO_THREAT":
+            normalized_resp = llm_response_text.strip().lower()
+            no_threat_keywords = ["no_threat", "no threat", "none", "no threat detected", "safe"]
+
+            if normalized_resp and all(keyword not in normalized_resp for keyword in no_threat_keywords):
                 is_threat = True
                 threatening_cmd = llm_response_text.strip()
                 llm_reasoning_text = f"AI가 다음 명령어를 의심스러운 활동으로 탐지했습니다: `{threatening_cmd}`"
