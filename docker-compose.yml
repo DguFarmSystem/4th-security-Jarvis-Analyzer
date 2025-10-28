@@ -6,15 +6,15 @@ networks:
 
 services:
   # Backend 서비스
-  backend:
-    image: clapppp/teleport-web:latest
-    container_name: teleport-backend
-    ports:
-      - "3000:3000" # 웹 UI 포트
-      - "8080:8080" # 백엔드 API 포트
-    networks:
-      - jarvis-network
-    restart: unless-stopped
+#  backend:
+#    image: clapppp/teleport-web:latest
+#    container_name: teleport-backend
+#    ports:
+#      - "3000:3000" # 웹 UI 포트
+#      - "8080:8080" # 백엔드 API 포트
+#    networks:
+#      - jarvis-network
+#    restart: unless-stopped
 
   # Python 분석 서비스
   analyzer:
@@ -25,8 +25,7 @@ services:
     networks:
       - jarvis-network
     restart: unless-stopped
-    depends_on:
-      - backend
+
 
 
 
